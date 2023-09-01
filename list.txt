@@ -1,0 +1,287 @@
+CREATE DEFINER=`preproduser`@`%` PROCEDURE `getQuestionsForCommunity_PAP_v1_BE`(
+    pageNo INT,
+    pageSize INT,
+    userId INT,
+    self INT,
+    topic INT,
+    tag INT
+)
+
+BEGIN DECLARE totalPages INT UNSIGNED DEFAULT 0;
+
+DECLARE totalItems INT UNSIGNED DEFAULT 0;
+
+DECLARE offsetValue INT UNSIGNED DEFAULT 0;
+
+SET
+    offsetValue = pageNo * pageSize;
+    
+SELECT
+                JSON_ARRAYAGG(data) as data
+            FROM
+                (
+                    SELECT
+                        json_object(
+                            "id",
+                            qm.id,
+                            "title",
+                            qm.title,
+                            "isAnonymous",
+                            qm.isAnonymous,
+                            "status",
+                            qm.status,
+                            "insights",
+                            json_object(
+								"isLiked",
+                                (SELECT vote from communityvotesmaster vm where questionId = qm.id and vm.userId = userId),
+                                "upVotes",
+                                im.upVotes
+                            ),
+                            "statusLabel",
+                            (
+                                CASE
+                                    WHEN qm.status = "pending" THEN "In Review"
+                                    WHEN qm.status = "rejected" THEN "Rejected"
+                                    ELSE null
+                                END
+                            ),
+                            "deepLink",
+                            qm.deepLink,
+                            "topic",
+                            (
+                                select
+                                    json_arrayagg(
+                                        JSON_OBJECT(
+                                            "topicId",
+                                            ctm.id,
+                                            "topicName",
+                                            ctm.title
+                                        )
+                                    )
+                                from
+                                    communitytopicsmaster ctm
+                                where
+                                    qm.topicId = ctm.id
+                            ),
+                            "tags",
+                            (
+                                select
+                                    JSON_ARRAYAGG(
+                                        JSON_OBJECT(
+                                            "tagId",
+                                            tm.id,
+                                            "tagTitle",
+                                            tm.name
+                                        )
+                                    )
+                                from
+                                    communitytagsmaster tm
+                                where
+                                    FIND_IN_SET(
+                                        tm.id,
+                                        Replace(
+                                            Replace(
+                                                Replace(
+                                                    Replace(
+                                                        (qm.tags),
+                                                        ']',
+                                                        ''
+                                                    ),
+                                                    '[',
+                                                    ''
+                                                ),
+                                                '"',
+                                                ''
+                                            ),
+                                            ' ',
+                                            ''
+                                        )
+                                    ) <> 0
+                            ),
+                            "createdAt",
+                            qm.createdAt,
+                            "userDetails",
+                            json_object (
+                                "id",
+                                um.id,
+                                "name",
+                                um.name,
+                                "email",
+                                um.email,
+                                "subheading",
+                                null,
+                                "profileUrl",
+                                null,
+                                "city",
+                                null,
+                                "age",
+                                null
+                            ),
+                            "totalReplies",
+                            (
+                                SELECT
+                                    count(*)
+                                from
+                                    communityrepliesmaster rm
+                                where
+                                    rm.questionId = qm.id
+                                    and rm.isReviewed
+                                    and rm.status = "approved"
+                                    and not rm.isDeleted
+                            ),
+                            "replies",
+                            (
+                                select
+                                    IF(
+                                        COUNT(*) <> 0,
+                                        json_arrayagg(
+                                            json_object(
+                                                "id",
+                                                temp.id,
+                                                "reply",
+                                                temp.reply,
+                                                "createdAt",
+                                                temp.createdAt,
+                                                "updatedAt",
+                                                temp.updatedAt,
+                                                "expertAnswer",
+                                                temp.expertAnswer,
+                                                "doctorId",
+                                                temp.doctorId,
+                                                "replyUserDetails",
+                                                temp.replyUserDetails
+                                            )
+                                        ),
+                                        NULL
+                                    )
+                                from
+                                    (
+                                        SELECT
+                                            rm.id as id,
+                                            rm.reply as reply,
+                                            rm.createdAt as createdAt,
+                                            rm.updatedAt as updatedAt,
+                                            rm.expertAnswer as expertAnswer,
+                                            em.userId as doctorId,
+                                            json_object(
+                                                "id",
+                                                if(not expertAnswer, um.id, em.id),
+                                                "name",
+                                                if(not expertAnswer, um.name, em.name),
+                                                "email",
+                                                if(not expertAnswer, um.email, null),
+                                                "subheading",
+                                                null,
+                                                "profileUrl",
+                                                null,
+                                                "city",
+                                                null,
+                                                "age",
+                                                null
+                                            ) as replyUserDetails
+                                        FROM
+                                            communityrepliesmaster rm
+                                            left join usersmaster um on rm.createdBy = um.id
+                                            left join communityexpertmaster em on rm.expertId = em.id
+                                        where
+                                            rm.questionId = qm.id
+                                            and not rm.isDeleted
+                                            and rm.isReviewed
+                                            and rm.status = "approved"
+                                        order by
+                                            rm.expertAnswer desc,
+                                            rm.createdAt desc
+                                        limit
+                                            1
+                                    ) as temp
+                            )
+                        ) as data
+                    from
+                        communityquestionsmaster qm
+                        left join usersmaster um on qm.createdBy = um.id
+                        left join communityuserinterests interest on interest.userId = userId
+                        left join communityinsightsmaster im on im.objectType = "question" and im.objectId = qm.id
+                        AND FIND_IN_SET(
+                            qm.topicId,
+                            Replace(
+                                Replace(
+                                    Replace(
+                                        Replace(
+                                            (interest.topics),
+                                            ']',
+                                            ''
+                                        ),
+                                        '[',
+                                        ''
+                                    ),
+                                    '"',
+                                    ''
+                                ),
+                                ' ',
+                                ''
+                            )
+                        )
+                    WHERE
+                        NOT qm.isDeleted
+                        AND IF(self <> 1, interest.id IS NOT NULL, 1)
+                        AND CASE
+                            WHEN self <> -1 THEN qm.createdBy = userId
+                            WHEN tag <> -1 THEN FIND_IN_SET(
+                                tag,
+                                Replace(
+                                    Replace(
+                                        Replace(
+                                            Replace(
+                                                (qm.tags),
+                                                ']',
+                                                ''
+                                            ),
+                                            '[',
+                                            ''
+                                        ),
+                                        '"',
+                                        ''
+                                    ),
+                                    ' ',
+                                    ''
+                                )
+                            ) <> 0
+                            and isReviewed
+                            and qm.status = "approved"
+                            WHEN topic <> -1 THEN qm.topicId = topic
+                            and isReviewed
+                            and qm.status = "approved"
+                            ELSE FIND_IN_SET(
+                                qm.topicId,
+                                Replace(
+                                    Replace(
+                                        Replace(
+                                            Replace(
+                                                (
+                                                    SELECT
+                                                        topics
+                                                    from
+                                                        communityuserinterests ui
+                                                    where
+                                                        ui.userId = userId
+                                                ),
+                                                ']',
+                                                ''
+                                            ),
+                                            '[',
+                                            ''
+                                        ),
+                                        '"',
+                                        ''
+                                    ),
+                                    ' ',
+                                    ''
+                                )
+                            ) <> 0
+                            and isReviewed
+                            and qm.status = "approved"
+                        END
+                    LIMIT
+                        offsetValue, pageSize
+                ) as temp;
+END
