@@ -117,7 +117,7 @@ exports.updateProduct = async (req, res) => {
         : null;
     }
 
-    let data = await queries.updateProduct(obj, { where: { uniq_id: id } });
+    await queries.updateProduct(obj, { where: { uniq_id: id } });
 
     return response.sendResponse(
       constant.response_code.SUCCESS,

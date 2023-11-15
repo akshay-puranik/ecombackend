@@ -6,6 +6,6 @@ router.get("/user/product/:id", products.getSingleProduct);
 
 router.get("/user/products/all", products.getAllProducts);
 
-// router.post("/user/signup")
+// router.post("/user/signup", )
 
 module.exports = router;
